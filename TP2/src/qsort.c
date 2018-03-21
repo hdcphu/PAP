@@ -16,6 +16,8 @@ static long long unsigned int experiments[NBEXPERIMENTS];
 
 static unsigned int N;
 
+static unsigned int NB_CHUNKS = 16;
+
 typedef int *array_int;
 
 static array_int X;
@@ -72,8 +74,8 @@ static int compare(const void *x, const void *y)
   /* + TODO: comparison function to be used by qsort()*/
 
   /* cast x and y to int* before comparing */
-  int v = (*((int*) x) - *((int*) y));
-  return v < -1 ? -1 : v > 1 ? 1 : v ;
+  int v = (*((int *)x) - *((int *)y));
+  return v < -1 ? -1 : v > 1 ? 1 : v;
 }
 
 void sequential_qsort_sort(int *T, const int size)
@@ -135,14 +137,71 @@ void merge(int *T, const int size)
   return;
 }
 
+void paralle_merge(int *T, const int size)
+{
+  int *X = (int *)malloc(2 * size * sizeof(int));
+
+  register unsigned int i = 0;
+  register unsigned int j = size;
+  register unsigned int k = 0;
+
+  unsigned int full_size = size * 2;
+  int end = 0;
+
+#pragma omp parallel for schedule(dynamic) private(i, j, k) shared(X)
+  for (k = 0; k < full_size; k++)
+  {
+    if (i >= size || j >= full_size)
+    {
+      end = k;
+      k = full_size;
+    }
+
+    if (T[i] < T[j])
+    {
+      X[k] = T[i];
+      i = i + 1;
+    }
+    else
+    {
+      X[k] = T[j];
+      j = j + 1;
+    }
+    
+    printf("--- %i\n", k);
+  }
+
+  k = end;
+  printf("---------\n");
+
+  if (i < size)
+  {
+    for (; i < size; i++, k++)
+    {
+      X[k] = T[i];
+    }
+  }
+  else
+  {
+    for (; j < 2 * size; j++, k++)
+    {
+      X[k] = T[j];
+    }
+  }
+
+  memcpy(T, X, 2 * size * sizeof(int));
+  free(X);
+
+  return;
+}
+
 void parallel_qsort_sort(int *T, const int size)
 {
 
   /* + TODO: parallel sorting based on libc qsort() function +
      * sequential merging */
 
-  int NB_CHUNKS = 8;
-  register unsigned int* start;
+  register unsigned int *start;
   register unsigned int i;
   register unsigned int subsize = size / NB_CHUNKS;
 #pragma omp parallel for schedule(static, NB_CHUNKS) private(i, start)
@@ -151,31 +210,19 @@ void parallel_qsort_sort(int *T, const int size)
     start = T + i * subsize;
     qsort(start, subsize, sizeof(int), compare);
   }
-  
+
   unsigned int c = NB_CHUNKS;
   unsigned int s = subsize;
-  unsigned int* end = T + size;
+  unsigned int *end = T + size;
   while (c > 1)
-  {    
-// #pragma omp parallel for schedule(dynamic) private(s, start)
+  {
     for (start = T; start < end; start = start + s + s)
-    {      
-      merge(start, s);      
-      // printf("%d %ui", start, s);
+    {
+      merge(start, s);
     }
     c = c >> 1;
     s = s << 1;
-    // for (int a = 0; a < N; a++)
-    // {
-    //   printf("%d ", T[a]);
-    // }
-    // printf("\n");
   }
-  // for (i = 0; i < chunks; i++)
-  // {
-    
-  // }
-  
 }
 
 void parallel_qsort_sort1(int *T, const int size)
@@ -183,6 +230,33 @@ void parallel_qsort_sort1(int *T, const int size)
 
   /* TODO: parallel sorting based on libc qsort() function +
      * PARALLEL merging */
+
+  
+  register unsigned int *start;
+  register unsigned int i;
+  register unsigned int subsize = size / NB_CHUNKS;
+#pragma omp parallel for schedule(static, NB_CHUNKS) private(i, start)
+  for (i = 0; i < NB_CHUNKS; i++)
+  {
+    start = T + i * subsize;
+    qsort(start, subsize, sizeof(int), compare);
+  }
+
+  unsigned int c = NB_CHUNKS;
+  unsigned int s = subsize;
+  unsigned int *end = T + size;
+  while (c > 1)
+  {
+#pragma omp parallel for schedule(dynamic) private(start)
+    for (start = T; start < end; start = start + s + s)
+    {
+      paralle_merge(start, s);
+      
+    }
+
+    c = c >> 1;
+    s = s << 1;
+  }
 }
 
 int main(int argc, char **argv)
@@ -191,13 +265,16 @@ int main(int argc, char **argv)
   unsigned long long int av;
   unsigned int exp;
 
-  if (argc != 2)
+  if (argc < 2 || argc > 3)
   {
-    fprintf(stderr, "qsort N \n");
+    fprintf(stderr, "qsort N <nb of chunks>\n");
     exit(-1);
   }
 
   N = 1 << (atoi(argv[1]));
+  if (argc == 3)
+    NB_CHUNKS = (atoi(argv[2]));
+
   X = (int *)malloc(N * sizeof(int));
 
   printf("--> Sorting an array of size %u\n", N);
